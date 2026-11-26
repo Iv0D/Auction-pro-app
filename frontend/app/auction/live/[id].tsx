@@ -21,6 +21,11 @@ import SockJS from "sockjs-client";
 
 type Phase = "loading" | "select-payment" | "live" | "error";
 
+function suggestedBid(basePrice: number, currentBid = 0) {
+  const incrementInCents = Math.ceil(Math.round(basePrice * 100) / 100);
+  return (currentBid + incrementInCents / 100).toFixed(2);
+}
+
 export default function AuctionLiveScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const auctionId = Number(id);
@@ -33,6 +38,7 @@ export default function AuctionLiveScreen() {
   const [lastResult, setLastResult]     = useState<ItemResult | null>(null);
   const [bidAmount, setBidAmount]       = useState("");
   const [bidding, setBidding]           = useState(false);
+  const [bidError, setBidError]         = useState("");
   const [errorMsg, setErrorMsg]         = useState("");
 
   const stompRef = useRef<StompClient | null>(null);
@@ -42,7 +48,8 @@ export default function AuctionLiveScreen() {
     (async () => {
       try {
         const pms = await getPaymentMethodsApi();
-        const verified = pms.filter((p) => p.verificado);
+        const verified = pms.filter((p) => p.verificado
+          && (p.tipo !== "CHEQUE_CERTIFICADO" || (p.moneda ?? "ARS").toUpperCase() === "ARS"));
 
         if (verified.length === 0) {
           // Sin medios verificados: entrar solo como espectador
@@ -70,8 +77,7 @@ export default function AuctionLiveScreen() {
       const s = await joinAuctionApi(auctionId, pmId ?? undefined);
       setState(s);
       if (s.basePrice != null) {
-        const min = (s.currentBid ?? 0) + s.basePrice * 0.01;
-        setBidAmount(min.toFixed(2));
+        setBidAmount(suggestedBid(s.basePrice, s.currentBid ?? 0));
       }
       connectWebSocket(s);
       setPhase("live");
@@ -79,6 +85,11 @@ export default function AuctionLiveScreen() {
       setErrorMsg(e?.message ?? "No se pudo unir a la subasta.");
       setPhase("error");
     }
+  };
+
+  const refreshCheckBalance = async () => {
+    const updated = await getAuctionStateApi(auctionId);
+    setState((prev) => prev ? { ...prev, chequeDisponible: updated.chequeDisponible } : prev);
   };
 
   // ─── 3. WebSocket ─────────────────────────────────────────────────────────
@@ -107,7 +118,10 @@ export default function AuctionLiveScreen() {
           const result: ItemResult = JSON.parse(msg.body);
           setLastResult(result);
           setBids([]);
+          setBidError("");
+          if (s.chequeDisponible != null) void refreshCheckBalance().catch(() => {});
           if (result.auctionFinished) {
+            setState((prev) => prev ? { ...prev, currentItemId: null } : prev);
             Alert.alert("Subasta finalizada", "La subasta llegó a su fin.", [
               { text: "Salir", onPress: handleLeave },
             ]);
@@ -121,7 +135,7 @@ export default function AuctionLiveScreen() {
               currentBid: null,
             } : prev);
             if (result.nextBasePrice)
-              setBidAmount((result.nextBasePrice * 0.01).toFixed(2));
+              setBidAmount(suggestedBid(result.nextBasePrice));
           }
         });
       },
@@ -133,11 +147,13 @@ export default function AuctionLiveScreen() {
   // ─── 4. Pujar ─────────────────────────────────────────────────────────────
   const handleBid = async () => {
     if (!state?.currentItemId || !bidAmount || bidding) return;
-    const amount = parseFloat(bidAmount);
-    if (isNaN(amount) || amount <= 0) {
-      Alert.alert("Monto inválido", "Ingresá un monto válido.");
+    const enteredAmount = bidAmount.trim().replace(",", ".");
+    const amount = Number(enteredAmount);
+    if (!/^\d+(\.\d{0,2})?$/.test(enteredAmount) || !Number.isFinite(amount) || amount <= 0) {
+      setBidError("Ingresá un importe positivo con hasta dos decimales.");
       return;
     }
+    setBidError("");
     setBidding(true);
     try {
       // Enviamos via REST para tener confirmación
@@ -152,10 +168,9 @@ export default function AuctionLiveScreen() {
         })
       );
       // Refrescar el estado: si pagó con cheque, el disponible puede haber cambiado
-      const updated = await getAuctionStateApi(auctionId);
-      setState((prev) => prev ? { ...prev, chequeDisponible: updated.chequeDisponible } : prev);
+      if (state.chequeDisponible != null) void refreshCheckBalance().catch(() => {});
     } catch (e: any) {
-      Alert.alert("Error al pujar", e?.message ?? "Intentá de nuevo.");
+      setBidError(e?.message ?? "No se pudo registrar la oferta. Intentá de nuevo.");
     } finally {
       setBidding(false);
     }
@@ -339,12 +354,13 @@ export default function AuctionLiveScreen() {
               <TextInput
                 style={styles.bidInput}
                 value={bidAmount}
-                onChangeText={setBidAmount}
+                onChangeText={(value) => { setBidAmount(value); setBidError(""); }}
                 keyboardType="numeric"
                 placeholder="0.00"
                 placeholderTextColor={COLORS.border}
               />
             </View>
+            {!!bidError && <Text accessibilityRole="alert" style={styles.bidError}>{bidError}</Text>}
             <Pressable
               style={[styles.bidBtn, (bidding || !state.currentItemId) && { opacity: 0.5 }]}
               onPress={handleBid}
@@ -471,6 +487,7 @@ const styles = StyleSheet.create({
   bidSection: { backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, gap: SPACING.sm },
   bidSectionTitle: { color: COLORS.muted, fontSize: 10, fontWeight: "700", letterSpacing: 1.5 },
   bidLimits: { color: COLORS.muted, fontSize: 12 },
+  bidError: { color: COLORS.danger, fontSize: 13 },
   checkAvailableBanner: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: COLORS.gold + "12", borderRadius: RADIUS.sm, paddingHorizontal: 10, paddingVertical: 6 },
   checkAvailableText: { color: COLORS.gold, fontSize: 12, fontWeight: "600" },
   bidInputRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#0A0A0A", borderRadius: RADIUS.sm, borderWidth: 1, borderColor: "#2A2A2A", paddingHorizontal: SPACING.md },

@@ -25,6 +25,10 @@ public class CheckCommitment {
     @JoinColumn(name = "item_id", nullable = false)
     private CatalogItem item;
 
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "bid_id", unique = true)
+    private Bid bid;
+
     @Column(name = "amount", nullable = false, precision = 18, scale = 2)
     private BigDecimal amount;
 

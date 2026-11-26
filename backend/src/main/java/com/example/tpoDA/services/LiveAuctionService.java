@@ -5,10 +5,14 @@ import com.example.tpoDA.entities.*;
 import com.example.tpoDA.exceptions.AppException;
 import com.example.tpoDA.repositories.*;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -18,7 +22,10 @@ import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class LiveAuctionService {
+
+    private static final String AUCTION_CURRENCY = "ARS";
 
     private final UserRepository               userRepository;
     private final AuctionRepository            auctionRepository;
@@ -29,6 +36,7 @@ public class LiveAuctionService {
     private final FineRepository               fineRepository;
     private final PaymentMethodRepository      paymentMethodRepository;
     private final AuctionRecordRepository      auctionRecordRepository;
+    private final CheckCommitmentRepository    checkCommitmentRepository;
     private final EmailService                 emailService;
     private final NotificationTriggerService   notificationTrigger;
     private final SimpMessagingTemplate        messagingTemplate;
@@ -79,6 +87,7 @@ public class LiveAuctionService {
                 throw new AppException("El medio de pago no te pertenece", HttpStatus.FORBIDDEN);
             if (!Boolean.TRUE.equals(pm.getVerificado()))
                 throw new AppException("El medio de pago no está verificado", HttpStatus.BAD_REQUEST);
+            validateCheckCurrency(pm);
             if (fineRepository.existsByClientIdAndStatus(client.getId(), "pendiente"))
                 throw new AppException("Tenés multas pendientes. Regularizalas antes de pujar.",
                     HttpStatus.FORBIDDEN);
@@ -120,31 +129,30 @@ public class LiveAuctionService {
             .currentBid(currentBid)
             .bidderNumber(attendee.getBidderNumber())
             .canBid(canBid)
+            .chequeDisponible(getChequeDisponible(pm))
             .streamingLink("https://streaming.auctionpro.com/live/" + auctionId)
-            .currency("ARS")
+            .currency(AUCTION_CURRENCY)
             .build();
     }
 
     // ─── REALIZAR OFERTA ─────────────────────────────────────────────────────
 
-    @Transactional
-    public synchronized BidUpdateDTO placeBid(String email, PlaceBidRequestDTO req) {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public BidUpdateDTO placeBid(String email, PlaceBidRequestDTO req) {
+        Auction auction = lockAuction(req.getAuctionId());
+        CatalogItem item = requireOpenLot(auction, req.getItemId());
         User user = resolveUser(email);
         Client client = user.getClient();
-        Auction auction = resolveAuction(req.getAuctionId());
-        CatalogItem item = catalogItemRepository.findById(req.getItemId())
-            .orElseThrow(() -> new AppException("Ítem no encontrado", HttpStatus.NOT_FOUND));
-
-        // Validaciones
-        if (!"si".equals(item.getAuctioned()) == false && "si".equals(item.getAuctioned()))
-            throw new AppException("Este artículo ya fue subastado", HttpStatus.CONFLICT);
 
         AttendeeSession session = attendeeSessionRepository.findByUserId(user.getId())
             .orElseThrow(() -> new AppException("No estás conectado a esta subasta", HttpStatus.FORBIDDEN));
-        if (!session.getAuction().getId().equals(req.getAuctionId()))
+        if (!Boolean.TRUE.equals(session.getActive()) || !session.getAuction().getId().equals(req.getAuctionId()))
             throw new AppException("No estás conectado a esta subasta", HttpStatus.FORBIDDEN);
         if (session.getPaymentMethod() == null)
             throw new AppException("No seleccionaste un medio de pago", HttpStatus.BAD_REQUEST);
+        PaymentMethod paymentMethod = paymentMethodRepository.findByIdForUpdate(session.getPaymentMethod().getId())
+            .orElseThrow(() -> new AppException("Medio de pago no encontrado", HttpStatus.NOT_FOUND));
+        validateCheckCurrency(paymentMethod);
         if (fineRepository.existsByClientIdAndStatus(client.getId(), "pendiente"))
             throw new AppException("Tenés multas pendientes", HttpStatus.FORBIDDEN);
 
@@ -158,6 +166,8 @@ public class LiveAuctionService {
         BigDecimal currentTop = topBidOpt.map(Bid::getAmount).orElse(BigDecimal.ZERO);
         BigDecimal amount = req.getAmount();
 
+        if (amount == null || amount.stripTrailingZeros().scale() > 2)
+            throw new AppException("Ingresá un importe con hasta dos decimales", HttpStatus.BAD_REQUEST);
         if (amount.compareTo(currentTop) <= 0)
             throw new AppException("La oferta debe ser mayor a la oferta actual", HttpStatus.BAD_REQUEST);
 
@@ -167,14 +177,18 @@ public class LiveAuctionService {
             || cat == ClientCategory.PLATA;
 
         if (hasLimits) {
-            BigDecimal minBid = currentTop.add(basePrice.multiply(BigDecimal.valueOf(0.01)));
-            BigDecimal maxBid = currentTop.add(basePrice.multiply(BigDecimal.valueOf(0.20)));
+            BigDecimal minBid = currentTop.add(basePrice.movePointLeft(2)).setScale(2, RoundingMode.CEILING);
+            BigDecimal maxBid = currentTop.add(basePrice.multiply(BigDecimal.valueOf(0.20))).setScale(2, RoundingMode.FLOOR);
             if (amount.compareTo(minBid) < 0)
                 throw new AppException(
                     "Oferta mínima: $" + minBid.setScale(2, RoundingMode.HALF_UP), HttpStatus.BAD_REQUEST);
             if (amount.compareTo(maxBid) > 0)
                 throw new AppException(
                     "Oferta máxima: $" + maxBid.setScale(2, RoundingMode.HALF_UP), HttpStatus.BAD_REQUEST);
+        }
+
+        if (isCertifiedCheck(paymentMethod)) {
+            validateCheckCoverage(paymentMethod, item, amount);
         }
 
         // Marcar oferta anterior como superada
@@ -191,10 +205,19 @@ public class LiveAuctionService {
             .winner("si")
             .build());
 
+        if (isCertifiedCheck(paymentMethod)) {
+            CheckCommitment commitment = checkCommitmentRepository
+                .findByPaymentMethodIdAndItemId(paymentMethod.getId(), item.getId())
+                .orElseGet(() -> CheckCommitment.builder().paymentMethod(paymentMethod).item(item).build());
+            commitment.setAmount(amount);
+            commitment.setBid(bid);
+            checkCommitmentRepository.save(commitment);
+        }
+
         // Calcular próximos límites
-        BigDecimal nextMin = amount.add(basePrice.multiply(BigDecimal.valueOf(0.01)));
+        BigDecimal nextMin = amount.add(basePrice.movePointLeft(2)).setScale(2, RoundingMode.CEILING);
         BigDecimal nextMax = hasLimits
-            ? amount.add(basePrice.multiply(BigDecimal.valueOf(0.20))) : null;
+            ? amount.add(basePrice.multiply(BigDecimal.valueOf(0.20))).setScale(2, RoundingMode.FLOOR) : null;
 
         BidUpdateDTO update = BidUpdateDTO.builder()
             .bidId(bid.getId())
@@ -208,19 +231,17 @@ public class LiveAuctionService {
             .build();
 
         // Broadcast en tiempo real
-        messagingTemplate.convertAndSend(
-            "/topic/auction/" + req.getAuctionId() + "/bids", update);
+        broadcastAfterCommit("/topic/auction/" + req.getAuctionId() + "/bids", update);
 
         return update;
     }
 
     // ─── CERRAR ÍTEM (rematador) ──────────────────────────────────────────────
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public ItemResultDTO closeItem(Integer auctionId, Integer itemId) {
-        resolveAuction(auctionId);
-        CatalogItem item = catalogItemRepository.findById(itemId)
-            .orElseThrow(() -> new AppException("Ítem no encontrado", HttpStatus.NOT_FOUND));
+        Auction auction = lockAuction(auctionId);
+        CatalogItem item = requireOpenLot(auction, itemId);
 
         Optional<Bid> winnerBidOpt = bidRepository.findTopBidByItemId(itemId);
         boolean sold = winnerBidOpt.isPresent();
@@ -233,6 +254,9 @@ public class LiveAuctionService {
             finalAmount = winnerBid.getAmount();
             winnerBidderNumber = winnerBid.getAttendee().getBidderNumber();
             buyer = winnerBid.getAttendee().getClient();
+
+            checkCommitmentRepository.findByBidId(winnerBid.getId())
+                .ifPresent(commitment -> commitment.setLocked(true));
 
             // Registrar venta
             BigDecimal commission = finalAmount.multiply(
@@ -283,6 +307,8 @@ productRepository.save(product); // lazy load ok
             }
         }
 
+        checkCommitmentRepository.releaseUnlockedForItem(itemId);
+
         // Marcar ítem como subastado
         item.setAuctioned("si");
         catalogItemRepository.save(item);
@@ -293,7 +319,6 @@ productRepository.save(product); // lazy load ok
 
         // Si terminó la subasta, marcarla como cerrada
         if (auctionFinished) {
-            Auction auction = resolveAuction(auctionId);
             auction.setStatus(AuctionStatus.CERRADA);
             auctionRepository.save(auction);
         }
@@ -314,7 +339,7 @@ productRepository.save(product); // lazy load ok
             .build();
 
         // Broadcast resultado
-        messagingTemplate.convertAndSend("/topic/auction/" + auctionId + "/result", result);
+        broadcastAfterCommit("/topic/auction/" + auctionId + "/result", result);
 
         return result;
     }
@@ -332,6 +357,7 @@ productRepository.save(product); // lazy load ok
 
     // ─── ESTADO ACTUAL (para reconexión) ─────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public JoinAuctionResponseDTO getAuctionState(String email, Integer auctionId) {
         User user = resolveUser(email);
         Client client = user.getClient();
@@ -360,8 +386,9 @@ productRepository.save(product); // lazy load ok
             .currentBid(currentBid)
             .bidderNumber(attendee.getBidderNumber())
             .canBid(session.getPaymentMethod() != null)
+            .chequeDisponible(getChequeDisponible(session.getPaymentMethod()))
             .streamingLink("https://streaming.auctionpro.com/live/" + auctionId)
-            .currency("ARS")
+            .currency(AUCTION_CURRENCY)
             .build();
     }
 
@@ -381,6 +408,65 @@ productRepository.save(product); // lazy load ok
     }
 
     // ─── HELPERS ─────────────────────────────────────────────────────────────
+
+    private Auction lockAuction(Integer auctionId) {
+        return auctionRepository.findByIdForUpdate(auctionId)
+            .orElseThrow(() -> new AppException("Subasta no encontrada", HttpStatus.NOT_FOUND));
+    }
+
+    private CatalogItem requireOpenLot(Auction auction, Integer itemId) {
+        CatalogItem item = catalogItemRepository.findById(itemId)
+            .filter(lot -> lot.getCatalog().getAuction().getId().equals(auction.getId()))
+            .orElseThrow(() -> new AppException("Ítem no encontrado en esta subasta", HttpStatus.NOT_FOUND));
+        if ("si".equals(item.getAuctioned()))
+            throw new AppException("Este artículo ya fue subastado", HttpStatus.CONFLICT);
+        if (auction.getStatus() != AuctionStatus.ABIERTA)
+            throw new AppException("La subasta no está activa", HttpStatus.BAD_REQUEST);
+        return item;
+    }
+
+    private boolean isCertifiedCheck(PaymentMethod method) {
+        return method != null && method.getTipo() == PaymentMethodTipo.CHEQUE_CERTIFICADO;
+    }
+
+    private void validateCheckCurrency(PaymentMethod method) {
+        if (isCertifiedCheck(method) && method.getMoneda() != null
+                && !AUCTION_CURRENCY.equalsIgnoreCase(method.getMoneda())) {
+            throw new AppException("La moneda del cheque debe ser " + AUCTION_CURRENCY, HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private BigDecimal checkGuarantee(PaymentMethod method) {
+        return method.getMontoGarantizado() != null ? method.getMontoGarantizado() : BigDecimal.ZERO;
+    }
+
+    private BigDecimal getChequeDisponible(PaymentMethod method) {
+        if (!isCertifiedCheck(method)) return null;
+        return checkGuarantee(method)
+            .subtract(checkCommitmentRepository.sumCommittedByPaymentMethodId(method.getId()));
+    }
+
+    private void validateCheckCoverage(PaymentMethod method, CatalogItem item, BigDecimal amount) {
+        BigDecimal available = checkGuarantee(method)
+            .subtract(checkCommitmentRepository.sumCommittedExcludingItem(method.getId(), item.getId()));
+        if (amount.compareTo(available) > 0) {
+            throw new AppException("El cheque certificado no cubre esta oferta. Disponible: $"
+                + available.toPlainString(), HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    private void broadcastAfterCommit(String topic, Object payload) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                try {
+                    messagingTemplate.convertAndSend(topic, payload);
+                } catch (RuntimeException error) {
+                    log.warn("No se pudo publicar una actualización en {}", topic, error);
+                }
+            }
+        });
+    }
 
     private void validateCanJoin(Client client, Auction auction) {
         if (!"si".equalsIgnoreCase(client.getAdmitted()))
