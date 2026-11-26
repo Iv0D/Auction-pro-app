@@ -16,6 +16,7 @@ export default function CustomButton({
 }: Props) {
   return (
     <Pressable
+      accessibilityRole="button"
       onPress={onPress}
       disabled={disabled}
       style={[styles.button, styles[variant], disabled && styles.disabled]}

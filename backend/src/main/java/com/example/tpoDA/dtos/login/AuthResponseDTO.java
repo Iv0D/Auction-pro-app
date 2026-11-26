@@ -16,4 +16,5 @@ public class AuthResponseDTO {
     private String name;
     private String category;
     private Boolean admitted;
+    private boolean administrator;
 }

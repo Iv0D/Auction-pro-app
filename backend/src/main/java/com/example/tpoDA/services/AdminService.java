@@ -3,25 +3,53 @@ package com.example.tpoDA.services;
 import com.example.tpoDA.dtos.admin.ApproveClientDTO;
 import com.example.tpoDA.dtos.admin.ClientStatusResponseDTO;
 import com.example.tpoDA.dtos.admin.RejectClientDTO;
+import com.example.tpoDA.dtos.admin.PendingPaymentDTO;
+import com.example.tpoDA.dtos.payment.PaymentMethodResponseDTO;
 import com.example.tpoDA.entities.*;
 import com.example.tpoDA.exceptions.AppException;
+import com.example.tpoDA.mappers.PaymentMethodMapper;
 import com.example.tpoDA.repositories.*;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AdminService {
 
     private final UserRepository userRepository;
     private final ClientRepository clientRepository;
     private final PendingRegistrationRepository pendingRegistrationRepository;
     private final EmailService emailService;
+    private final PaymentMethodRepository paymentMethodRepository;
+
+    @Transactional(readOnly = true)
+    public List<ClientStatusResponseDTO> getPendingClients() {
+        return userRepository.findByRegistrationStatusOrderByIdAsc(RegistrationStatus.PENDIENTE)
+            .stream().map(user -> toStatusDTO(user.getClient(), user)).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<PendingPaymentDTO> getPendingPayments() {
+        return paymentMethodRepository.findByVerificadoFalseOrderByIdAsc()
+            .stream().map(method -> new PendingPaymentDTO(method.getUser().getEmail(), PaymentMethodMapper.toDTO(method))).toList();
+    }
+
+    @Transactional
+    public PaymentMethodResponseDTO verifyPayment(Integer id) {
+        PaymentMethod method = paymentMethodRepository.findByIdForUpdate(id)
+            .orElseThrow(() -> new AppException("Medio de pago no encontrado", HttpStatus.NOT_FOUND));
+        method.setVerificado(true);
+        method.setEstado("VERIFICADO");
+        return PaymentMethodMapper.toDTO(method);
+    }
 
     // ─── APROBAR ──────────────────────────────────────────────────────────────
 
@@ -31,7 +59,7 @@ public class AdminService {
         Client client = clientRepository.findById(clientId)
                 .orElseThrow(() -> new AppException("Cliente no encontrado", HttpStatus.NOT_FOUND));
 
-        User user = userRepository.findByClientId(clientId)
+        User user = userRepository.findByClientIdForUpdate(clientId)
                 .orElseThrow(() -> new AppException("Usuario no encontrado para este cliente", HttpStatus.NOT_FOUND));
 
         // Validar que no esté ya aprobado
@@ -56,8 +84,9 @@ public class AdminService {
         try {
             emailService.sendSetPasswordEmail(user.getEmail(), token);
         } catch (Exception e) {
-            System.err.println("[AdminService] No se pudo enviar mail de aprobación: " + e.getMessage());
-            System.err.println("[DEV] Token de activación para " + user.getEmail() + ": " + token);
+            log.warn("Falló el envío de un correo de activación ({})", e.getClass().getSimpleName());
+            throw new AppException("No se pudo enviar la activación. Volvé a intentar la aprobación.",
+                    HttpStatus.SERVICE_UNAVAILABLE);
         }
 
         return toStatusDTO(client, user);
@@ -71,7 +100,7 @@ public class AdminService {
         Client client = clientRepository.findById(clientId)
                 .orElseThrow(() -> new AppException("Cliente no encontrado", HttpStatus.NOT_FOUND));
 
-        User user = userRepository.findByClientId(clientId)
+        User user = userRepository.findByClientIdForUpdate(clientId)
                 .orElseThrow(() -> new AppException("Usuario no encontrado para este cliente", HttpStatus.NOT_FOUND));
 
         // Validar que no esté ya procesado
@@ -91,7 +120,7 @@ public class AdminService {
         try {
             emailService.sendRejectionEmail(user.getEmail(), dto.getReason());
         } catch (Exception e) {
-            System.err.println("[AdminService] No se pudo enviar mail de rechazo: " + e.getMessage());
+            log.warn("Falló el envío de un correo de rechazo ({})", e.getClass().getSimpleName());
         }
 
         return toStatusDTO(client, user);

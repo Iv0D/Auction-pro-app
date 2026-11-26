@@ -17,6 +17,7 @@ export default function CustomInput({ label, ...props }: Props) {
       <Text style={styles.label}>{label}</Text>
 
       <TextInput
+        accessibilityLabel={label}
         placeholderTextColor={COLORS.muted}
         style={styles.input}
         {...props}

@@ -17,7 +17,7 @@ public interface NotificationRepository extends JpaRepository<Notification, Inte
     @Query("""
         SELECT n FROM Notification n
         WHERE n.user.id = :userId
-          AND n.type IN ('PRODUCT_APPROVED','PRODUCT_REJECTED','BID_OUTBID','PAYMENT_SUCCESS')
+          AND n.type IN ('PRODUCT_APPROVED','PRODUCT_REJECTED','BID_OUTBID','PAYMENT_SUCCESS','AUCTION_WON')
         ORDER BY n.createdAt DESC
     """)
     List<Notification> findRecentByUserId(@Param("userId") Integer userId);

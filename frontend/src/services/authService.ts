@@ -8,6 +8,7 @@ export interface AuthResponse {
   name: string;
   category: string | null;
   admitted: boolean;
+  administrator?: boolean;
 }
 
 export interface LoginPayload {
@@ -56,3 +57,6 @@ export const resetPasswordApi = (token: string, newPassword: string) =>
     method: "POST",
     body: JSON.stringify({ token, newPassword }),
   });
+
+export const validateResetPasswordApi = (token: string) =>
+  request<{ message: string }>(`/auth/reset-password/validate?token=${encodeURIComponent(token)}`);

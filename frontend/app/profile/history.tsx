@@ -7,7 +7,6 @@ import {
   Pressable,
   RefreshControl,
   SafeAreaView,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -165,7 +164,6 @@ function MetricCard({
 function BidCard({ bid }: { bid: BidHistory }) {
   const won = bid.winner === true;
   const lost = bid.winner === false;
-  const pending = bid.winner === null;
 
   const formattedDate = bid.auctionDate
     ? new Date(bid.auctionDate + "T00:00:00").toLocaleDateString("es-AR", {

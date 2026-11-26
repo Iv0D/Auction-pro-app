@@ -4,7 +4,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 ENV EXPO_PUBLIC_API_URL_WEB=/api
-RUN npm exec -- expo export --platform web
+RUN npm run build:web
 
 FROM nginx:alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf

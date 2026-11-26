@@ -1,8 +1,8 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { Tabs, router } from "expo-router";
-import { Pressable, Text, StyleSheet } from "react-native";
+import { Text, StyleSheet } from "react-native";
 import { useAuth } from "../../src/context/AuthContext";
-import { COLORS, SPACING } from "../../src/constants/theme";
+import { COLORS } from "../../src/constants/theme";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 

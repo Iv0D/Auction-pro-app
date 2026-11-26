@@ -17,6 +17,7 @@ const TYPE_CONFIG: Record<string, { icon: string; color: string; label: string }
   PRODUCT_REJECTED: { icon: "close-circle-outline",  color: "#EF4444", label: "Producto rechazado"  },
   BID_OUTBID:       { icon: "trending-up",            color: "#EF4444", label: "Puja superada"       },
   AUCTION_STARTING: { icon: "alarm",                  color: "#F4C542", label: "Subasta por empezar" },
+  AUCTION_WON: { icon: "gavel", color: "#F4C542", label: "Lote adjudicado" },
   PAYMENT_SUCCESS:  { icon: "check-decagram-outline", color: "#22C55E", label: "Pago confirmado"     },
   WATCHLIST_ALERT:  { icon: "star-outline",           color: "#60A5FA", label: "Artículo seguido"    },
 };

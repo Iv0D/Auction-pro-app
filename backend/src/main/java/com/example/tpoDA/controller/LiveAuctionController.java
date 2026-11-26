@@ -4,8 +4,6 @@ import com.example.tpoDA.dtos.live.*;
 import com.example.tpoDA.services.LiveAuctionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.messaging.handler.annotation.MessageMapping;
-import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -69,12 +67,5 @@ public class LiveAuctionController {
             @PathVariable Integer itemId
     ) {
         return ResponseEntity.ok(liveAuctionService.closeItem(auctionId, itemId));
-    }
-
-    // WebSocket: oferta desde cliente STOMP
-    @MessageMapping("/bid")
-    public void placeBidWs(PlaceBidRequestDTO req, SimpMessageHeaderAccessor headers) {
-        String email = headers.getUser() != null ? headers.getUser().getName() : null;
-        if (email != null) liveAuctionService.placeBid(email, req);
     }
 }

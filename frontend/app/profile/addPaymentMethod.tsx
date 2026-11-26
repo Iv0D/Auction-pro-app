@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { useState } from "react";
 import {
-    Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View,
+    Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View,
 } from "react-native";
 import CustomButton from "../../src/components/ui/CustomButton";
 import CustomInput from "../../src/components/ui/CustomInput";

@@ -5,8 +5,8 @@ import com.example.tpoDA.entities.User;
 import com.example.tpoDA.exceptions.AppException;
 import com.example.tpoDA.repositories.PasswordResetTokenRepository;
 import com.example.tpoDA.repositories.UserRepository;
-import com.example.tpoDA.security.JwtService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -17,13 +17,13 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class PasswordResetService {
 
     private final UserRepository userRepository;
     private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final EmailService emailService;
     private final PasswordEncoder passwordEncoder;
-    private final JwtService jwtService;
 
     // ─── PASO 1: Solicitar recuperación ──────────────────────────────────────
 
@@ -32,7 +32,7 @@ public class PasswordResetService {
 
         // Siempre respondemos OK aunque el email no exista
         // (para no revelar si un email está registrado o no)
-        userRepository.findByEmail(email).ifPresent(user -> {
+        userRepository.findByEmail(email == null ? "" : email.trim()).filter(User::isEnabled).ifPresent(user -> {
 
             // Invalidar tokens anteriores del mismo usuario
             passwordResetTokenRepository.deleteByUserId(user.getId());
@@ -48,10 +48,9 @@ public class PasswordResetService {
             passwordResetTokenRepository.save(resetToken);
 
             try {
-                emailService.sendPasswordResetEmail(email, token);
+                emailService.sendPasswordResetEmail(user.getEmail(), token);
             } catch (Exception e) {
-                System.err.println("[PasswordResetService] No se pudo enviar mail: " + e.getMessage());
-                System.err.println("[DEV] Token de reset para " + email + ": " + token);
+                log.warn("Falló el envío de un correo de recuperación ({})", e.getClass().getSimpleName());
             }
         });
     }
@@ -79,7 +78,7 @@ public class PasswordResetService {
             throw new AppException("La contraseña debe tener al menos 6 caracteres", HttpStatus.BAD_REQUEST);
         }
 
-        PasswordResetToken resetToken = passwordResetTokenRepository.findByToken(token)
+        PasswordResetToken resetToken = passwordResetTokenRepository.findForUpdate(token)
                 .orElseThrow(() -> new AppException("El link no es válido", HttpStatus.BAD_REQUEST));
 
         if (resetToken.isUsed()) {
@@ -91,6 +90,9 @@ public class PasswordResetService {
 
         // Actualizar contraseña
         User user = resetToken.getUser();
+        if (!user.isEnabled()) {
+            throw new AppException("La cuenta todavía no está habilitada", HttpStatus.FORBIDDEN);
+        }
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);
 

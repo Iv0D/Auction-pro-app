@@ -2,7 +2,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-  ActivityIndicator, Alert, Pressable,
+  ActivityIndicator, Alert, Platform, Pressable,
   SafeAreaView, ScrollView, StyleSheet, Text, View,
 } from "react-native";
 
@@ -17,6 +17,7 @@ const TYPE_CONFIG: Record<string, { icon: string; color: string; label: string }
   PRODUCT_REJECTED: { icon: "close-circle-outline",  color: "#EF4444", label: "Producto rechazado"  },
   BID_OUTBID:       { icon: "trending-up",            color: "#EF4444", label: "Tu puja fue superada"},
   AUCTION_STARTING: { icon: "alarm",                  color: "#F4C542", label: "Subasta por empezar" },
+  AUCTION_WON: { icon: "gavel", color: "#F4C542", label: "Lote adjudicado" },
   PAYMENT_SUCCESS:  { icon: "check-decagram-outline", color: "#22C55E", label: "Pago confirmado"     },
   WATCHLIST_ALERT:  { icon: "star-outline",           color: "#60A5FA", label: "Artículo seguido"    },
 };
@@ -26,6 +27,7 @@ export default function NotificationDetailScreen() {
   const [notification, setNotification] = useState<Notification | null>(null);
   const [loading, setLoading]           = useState(true);
   const [responding, setResponding]     = useState(false);
+  const [responseError, setResponseError] = useState("");
 
   useEffect(() => {
     getNotificationsApi()
@@ -37,33 +39,36 @@ export default function NotificationDetailScreen() {
           setNotification({ ...found, read: true });
         }
       })
+      .catch(() => setNotification(null))
       .finally(() => setLoading(false));
   }, [id]);
 
   const handleRespond = (response: "ACCEPTED" | "REJECTED_BY_USER") => {
     const accepting = response === "ACCEPTED";
-    Alert.alert(
-      accepting ? "Aceptar condiciones" : "Rechazar condiciones",
-      accepting
-        ? "Al aceptar, tu artículo será publicado en la próxima subasta curada. Los fondos se liquidarán 48 hs post-subasta."
-        : "Al rechazar, tu artículo no será publicado. Podés volver a enviarlo cuando quieras.",
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: accepting ? "Aceptar" : "Rechazar",
-          style: accepting ? "default" : "destructive",
-          onPress: async () => {
-            setResponding(true);
-            try {
-              const updated = await respondToApprovalApi(Number(id), response);
-              setNotification(updated);
-            } catch (err: any) {
-              Alert.alert("Error", err?.message ?? "No se pudo procesar la respuesta.");
-            } finally { setResponding(false); }
-          },
-        },
-      ]
-    );
+    const title = accepting ? "Aceptar condiciones" : "Rechazar condiciones";
+    const message = accepting
+      ? "¿Aceptás el precio base y la comisión propuestos?"
+      : "¿Querés rechazar esta propuesta?";
+    const submit = async () => {
+      setResponding(true);
+      setResponseError("");
+      try {
+        setNotification(await respondToApprovalApi(Number(id), response));
+      } catch (error) {
+        setResponseError(error instanceof Error ? error.message : "No se pudo procesar la respuesta.");
+      } finally {
+        setResponding(false);
+      }
+    };
+
+    if (Platform.OS === "web") {
+      if (window.confirm(message)) void submit();
+      return;
+    }
+    Alert.alert(title, message, [
+      { text: "Cancelar", style: "cancel" },
+      { text: accepting ? "Aceptar" : "Rechazar", style: accepting ? "default" : "destructive", onPress: submit },
+    ]);
   };
 
   if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={COLORS.gold} /></View>;
@@ -164,7 +169,8 @@ export default function NotificationDetailScreen() {
         {/* Acciones requeridas */}
         {isApproval && isPending && (
           <View style={styles.actionsWrap}>
-            <Text style={styles.actionsLabel}>ACCIONES REQUERIDAS</Text>
+            <Text style={styles.actionsLabel}>CONDICIONES DE PUBLICACIÓN</Text>
+            {!!responseError && <Text accessibilityRole="alert" style={styles.errorText}>{responseError}</Text>}
 
             <Pressable
               style={({ pressed }) => [styles.acceptBtn, pressed && { opacity: 0.8 }]}
@@ -187,8 +193,7 @@ export default function NotificationDetailScreen() {
             <View style={styles.infoBox}>
               <MaterialCommunityIcons name="information-outline" size={15} color={COLORS.muted} />
               <Text style={styles.infoBoxText}>
-                Al aceptar, tu artículo será publicado automáticamente en la próxima galería curada.
-                Los fondos se liquidarán 48 hs post-subasta.
+                La aceptación confirma el precio base y la comisión de la pieza.
               </Text>
             </View>
           </View>
@@ -230,6 +235,7 @@ const priceStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
+  errorText: { color: COLORS.danger },
   container: { flex: 1, backgroundColor: "#0A0A0A" },
   centered: { flex: 1, justifyContent: "center", alignItems: "center", gap: SPACING.md },
   mutedText: { color: COLORS.muted, fontSize: 15 },

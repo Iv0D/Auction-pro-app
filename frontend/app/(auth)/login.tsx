@@ -1,7 +1,7 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useState } from "react";
-import { Alert, Platform, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import { Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
 
 import CustomButton from "../../src/components/ui/CustomButton";
 import CustomInput from "../../src/components/ui/CustomInput";

@@ -2,7 +2,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator, Alert, SafeAreaView, ScrollView,
+    ActivityIndicator, SafeAreaView, ScrollView,
     StyleSheet, Text, View,
 } from "react-native";
 import CustomButton from "../../src/components/ui/CustomButton";

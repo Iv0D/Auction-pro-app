@@ -53,33 +53,6 @@ public class JwtService {
                 .getSubject();
     }
 
-    // =========================
-    // VALIDAR TOKEN
-    // =========================
-
-    public boolean isTokenValid(String token, String email) {
-
-        final String username = extractUsername(token);
-
-        return username.equals(email)
-                && !isTokenExpired(token);
-    }
-
-    // =========================
-    // TOKEN EXPIRADO
-    // =========================
-
-    private boolean isTokenExpired(String token) {
-
-        return extractAllClaims(token)
-                .getExpiration()
-                .before(new Date());
-    }
-
-    // =========================
-    // CLAIMS
-    // =========================
-
     private Claims extractAllClaims(String token) {
 
         return Jwts.parserBuilder()

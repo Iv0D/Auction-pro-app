@@ -9,6 +9,7 @@ import {
 import { COLORS, RADIUS, SPACING } from "../../src/constants/theme";
 import { useAuth } from "../../src/context/AuthContext";
 import { Auction, getAuctionCoverUrl, getAuctionsApi } from "../../src/services/auctionService";
+import { isAuctionLive, isAuctionUpcoming } from "../../src/utils/auction";
 
 const CATEGORY_LABEL: Record<string, string> = {
   comun: "Común", especial: "Especial", plata: "Plata", oro: "Oro", platino: "Platino",
@@ -21,48 +22,20 @@ export default function HomeScreen() {
   const { user } = useAuth();
   const [auctions, setAuctions]   = useState<Auction[]>([]);
   const [loading, setLoading]     = useState(true);
+  const [error, setError]          = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchAuctions = useCallback(async () => {
+    setError("");
     try { setAuctions(await getAuctionsApi()); }
-    catch { /* silencioso */ }
+    catch { setError("No pudimos cargar las subastas. Revisá la conexión con la API."); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
 
   useEffect(() => { fetchAuctions(); }, [fetchAuctions]);
 
-  const isAuctionLive = (auction: Auction) => {
-  if (
-    auction.status !== "abierta" ||
-    !auction.date ||
-    !auction.time
-  ) {
-    return false;
-  }
-
-  const now = new Date();
-  const start = new Date(`${auction.date}T${auction.time}`);
-
-  return (
-    now.toDateString() === start.toDateString() &&
-    now >= start
-  );
-};
-
-const isUpcomingAuction = (auction: Auction) => {
-  if (!auction.date || !auction.time) return false;
-
-  const now = new Date();
-  const start = new Date(`${auction.date}T${auction.time}`);
-
-  return start > now;
-};
-
   const live = auctions.filter(isAuctionLive);
-
-const upcoming = auctions.filter(
-  (a) => !isAuctionLive(a) && isUpcomingAuction(a)
-);
+  const upcoming = auctions.filter(isAuctionUpcoming);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -130,7 +103,16 @@ const upcoming = auctions.filter(
               </View>
             )}
 
-            {auctions.length === 0 && (
+            {!!error && (
+              <View style={styles.emptyWrap}>
+                <Text accessibilityRole="alert" style={styles.emptyText}>{error}</Text>
+                <Pressable accessibilityRole="button" onPress={() => void fetchAuctions()}>
+                  <Text style={styles.sectionLink}>Volver a intentar</Text>
+                </Pressable>
+              </View>
+            )}
+
+            {!error && live.length === 0 && upcoming.length === 0 && (
               <View style={styles.emptyWrap}>
                 <MaterialCommunityIcons name="gavel" size={56} color={COLORS.border} />
                 <Text style={styles.emptyTitle}>Sin subastas por ahora</Text>

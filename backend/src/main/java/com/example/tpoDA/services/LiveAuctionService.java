@@ -6,6 +6,7 @@ import com.example.tpoDA.exceptions.AppException;
 import com.example.tpoDA.repositories.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
@@ -41,7 +42,12 @@ public class LiveAuctionService {
     private final NotificationTriggerService   notificationTrigger;
     private final SimpMessagingTemplate        messagingTemplate;
     private final OwnerRepository              ownerRepository;
-    private final ProductRepository            productRepository;
+
+    @Value("${app.streaming.base-url:}")
+    private String streamingBaseUrl;
+
+    @Value("${app.auction.shipping-fee:500}")
+    private BigDecimal shippingFee;
 
     // ─── UNIRSE A LA SUBASTA ─────────────────────────────────────────────────
 
@@ -56,8 +62,11 @@ public class LiveAuctionService {
         validateCanJoin(client, auction);
 
         // 2. Un usuario no puede estar en más de una subasta a la vez
-        attendeeSessionRepository.findByUserId(user.getId()).ifPresent(existing -> {
-            if (!existing.getAuction().getId().equals(auctionId)) {
+        Optional<AttendeeSession> existingSession = attendeeSessionRepository.findByUserId(user.getId());
+        existingSession.ifPresent(existing -> {
+            if (Boolean.TRUE.equals(existing.getActive())
+                    && !existing.getAuction().getId().equals(auctionId)
+                    && existing.getAuction().getStatus() == AuctionStatus.ABIERTA) {
                 throw new AppException(
                     "Ya estás conectado a otra subasta. Salí primero de esa.",
                     HttpStatus.CONFLICT);
@@ -96,7 +105,9 @@ public class LiveAuctionService {
 
         // 5. Guardar sesión activa
         PaymentMethod finalPm = pm;
-        AttendeeSession session = attendeeSessionRepository.findByUserId(user.getId())
+        boolean firstEntry = existingSession.map(previous -> !previous.getAuction().getId().equals(auctionId))
+            .orElse(true);
+        AttendeeSession session = existingSession
             .map(s -> { s.setAuction(auction); s.setPaymentMethod(finalPm);
                         s.setActive(true); return s; })
             .orElse(AttendeeSession.builder()
@@ -111,12 +122,13 @@ public class LiveAuctionService {
                 .map(Bid::getAmount).orElse(null)
             : null;
 
-        // 7. Mandar mail con link de streaming
-        try {
-            emailService.sendStreamingEmail(user.getEmail(),
-                auction.getLocation(), "https://streaming.auctionpro.com/live/" + auctionId);
-        } catch (Exception e) {
-            System.err.println("[LiveAuction] No se pudo enviar mail de streaming: " + e.getMessage());
+        String streamUrl = streamingLink(auctionId);
+        if (streamUrl != null && firstEntry) {
+            try {
+                emailService.sendStreamingEmail(user.getEmail(), auction.getLocation(), streamUrl);
+            } catch (Exception e) {
+                log.warn("Falló el envío de un enlace de streaming ({})", e.getClass().getSimpleName());
+            }
         }
 
         return JoinAuctionResponseDTO.builder()
@@ -130,7 +142,7 @@ public class LiveAuctionService {
             .bidderNumber(attendee.getBidderNumber())
             .canBid(canBid)
             .chequeDisponible(getChequeDisponible(pm))
-            .streamingLink("https://streaming.auctionpro.com/live/" + auctionId)
+            .streamingLink(streamUrl)
             .currency(AUCTION_CURRENCY)
             .build();
     }
@@ -245,23 +257,24 @@ public class LiveAuctionService {
 
         Optional<Bid> winnerBidOpt = bidRepository.findTopBidByItemId(itemId);
         boolean sold = winnerBidOpt.isPresent();
-        BigDecimal finalAmount = item.getBasePrice();
+        BigDecimal finalAmount = BigDecimal.ZERO;
+        BigDecimal commission = BigDecimal.ZERO;
+        BigDecimal shipping = BigDecimal.ZERO;
         Integer winnerBidderNumber = null;
-        Client buyer = null;
 
         if (sold) {
             Bid winnerBid = winnerBidOpt.get();
             finalAmount = winnerBid.getAmount();
             winnerBidderNumber = winnerBid.getAttendee().getBidderNumber();
-            buyer = winnerBid.getAttendee().getClient();
+            Client buyer = winnerBid.getAttendee().getClient();
 
             checkCommitmentRepository.findByBidId(winnerBid.getId())
                 .ifPresent(commitment -> commitment.setLocked(true));
 
             // Registrar venta
-            BigDecimal commission = finalAmount.multiply(
-                item.getCommission().divide(BigDecimal.valueOf(100)));
-            BigDecimal shipping = BigDecimal.valueOf(500); // tarifa fija de ejemplo
+            commission = finalAmount.multiply(item.getCommission().movePointLeft(2))
+                .setScale(2, RoundingMode.HALF_UP);
+            shipping = shippingFee;
 
             auctionRecordRepository.save(AuctionRecord.builder()
                 .auction(item.getCatalog().getAuction())
@@ -274,36 +287,17 @@ public class LiveAuctionService {
 
             // Transferir propiedad
             Product product = item.getProduct();
-Person buyerPerson = buyer.getPerson();
+            Person buyerPerson = buyer.getPerson();
+            Owner newOwner = ownerRepository.findById(buyerPerson.getId())
+                .orElseGet(() -> ownerRepository.save(Owner.builder().person(buyerPerson)
+                    .country(buyer.getCountry()).verifier(buyer.getVerifier())
+                    .financialVerification("si").judicialVerification("si").riskRating(1).build()));
+            product.setOwner(newOwner);
 
-Owner newOwner = ownerRepository.findById(buyerPerson.getId())
-    .orElse(null);
-
-if (newOwner == null) {
-    newOwner = Owner.builder()
-        .person(buyerPerson)
-        .country(buyer.getCountry())
-        .verifier(buyer.getVerifier())
-        .financialVerification("si")
-        .judicialVerification("si")
-        .riskRating(1)
-        .build();
-
-    newOwner = ownerRepository.save(newOwner);
-}
-
-product.setOwner(newOwner);
-productRepository.save(product); // lazy load ok
-            
-
-            // Notificación al ganador
-            User winnerUser = userRepository.findByOwnerId(buyer.getPerson().getId())
-                .orElse(null);
+            User winnerUser = userRepository.findByClientId(buyer.getId()).orElse(null);
             if (winnerUser != null) {
-                notificationTrigger.notifyPaymentSuccess(winnerUser,
-                    finalAmount.add(commission).add(shipping),
-                    String.format("Ganaste el artículo \"%s\". Comisión: $%,.0f · Envío: $%,.0f",
-                        getProductName(item.getProduct()), commission.doubleValue(), shipping.doubleValue()));
+                notificationTrigger.notifyAuctionWon(winnerUser, auction, getProductName(product),
+                    finalAmount.add(commission).add(shipping));
             }
         }
 
@@ -330,8 +324,8 @@ productRepository.save(product); // lazy load ok
             .sold(sold)
             .winnerBidderNumber(winnerBidderNumber)
             .finalAmount(finalAmount)
-            .commission(item.getCommission())
-            .shippingCost(BigDecimal.valueOf(500))
+            .commission(commission)
+            .shippingCost(shipping)
             .nextItemId(nextItem != null ? nextItem.getId() : null)
             .nextItemName(nextItem != null ? getProductName(nextItem.getProduct()) : null)
             .nextBasePrice(nextItem != null ? nextItem.getBasePrice() : null)
@@ -349,10 +343,9 @@ productRepository.save(product); // lazy load ok
     @Transactional
     public void leaveAuction(String email, Integer auctionId) {
         User user = resolveUser(email);
-        attendeeSessionRepository.findByUserId(user.getId()).ifPresent(session -> {
-            session.setActive(false);
-            attendeeSessionRepository.save(session);
-        });
+        attendeeSessionRepository.findByUserId(user.getId())
+            .filter(session -> session.getAuction().getId().equals(auctionId))
+            .ifPresent(session -> session.setActive(false));
     }
 
     // ─── ESTADO ACTUAL (para reconexión) ─────────────────────────────────────
@@ -385,9 +378,9 @@ productRepository.save(product); // lazy load ok
             .basePrice(currentItem != null ? currentItem.getBasePrice() : null)
             .currentBid(currentBid)
             .bidderNumber(attendee.getBidderNumber())
-            .canBid(session.getPaymentMethod() != null)
+            .canBid(Boolean.TRUE.equals(session.getActive()) && session.getPaymentMethod() != null)
             .chequeDisponible(getChequeDisponible(session.getPaymentMethod()))
-            .streamingLink("https://streaming.auctionpro.com/live/" + auctionId)
+            .streamingLink(streamingLink(auctionId))
             .currency(AUCTION_CURRENCY)
             .build();
     }
@@ -422,7 +415,14 @@ productRepository.save(product); // lazy load ok
             throw new AppException("Este artículo ya fue subastado", HttpStatus.CONFLICT);
         if (auction.getStatus() != AuctionStatus.ABIERTA)
             throw new AppException("La subasta no está activa", HttpStatus.BAD_REQUEST);
+        CatalogItem currentItem = getCurrentItem(auction.getId());
+        if (currentItem == null || !currentItem.getId().equals(itemId))
+            throw new AppException("Este lote todavía no está en remate", HttpStatus.CONFLICT);
         return item;
+    }
+
+    private String streamingLink(Integer auctionId) {
+        return streamingBaseUrl.isBlank() ? null : streamingBaseUrl.replaceFirst("/+$", "") + "/" + auctionId;
     }
 
     private boolean isCertifiedCheck(PaymentMethod method) {

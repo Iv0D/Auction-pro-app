@@ -1,8 +1,8 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Image, Platform, Pressable, SafeAreaView,
+  ActivityIndicator, Alert, Image, Linking, Platform, Pressable, SafeAreaView,
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 
@@ -10,7 +10,7 @@ import { COLORS, RADIUS, SPACING } from "../../../src/constants/theme";
 import {
   BidUpdate, ItemResult, JoinAuctionResponse,
   WS_URL, getAuctionStateApi, joinAuctionApi,
-  leaveAuctionApi,
+  leaveAuctionApi, placeBidApi,
 } from "../../../src/services/liveAuctionService";
 import { PaymentMethod, getPaymentMethodsApi } from "../../../src/services/paymentService";
 import { getItemPhotoUrl } from "../../../src/services/auctionService";
@@ -41,108 +41,118 @@ export default function AuctionLiveScreen() {
   const [bidError, setBidError]         = useState("");
   const [errorMsg, setErrorMsg]         = useState("");
 
-  const stompRef = useRef<StompClient | null>(null);
+  const currentLot = useRef<number | null>(null);
+  const lastBidId = useRef(0);
 
-  // ─── 1. Cargar medios de pago al entrar ───────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      try {
-        const pms = await getPaymentMethodsApi();
-        const verified = pms.filter((p) => p.verificado
-          && (p.tipo !== "CHEQUE_CERTIFICADO" || (p.moneda ?? "ARS").toUpperCase() === "ARS"));
-
-        if (verified.length === 0) {
-          // Sin medios verificados: entrar solo como espectador
-          await doJoin(null);
-        } else if (verified.length === 1) {
-          // Solo uno: preguntar si quiere usarlo
-          setPaymentMethods(verified);
-          setSelectedPm(verified[0].id);
-          setPhase("select-payment");
-        } else {
-          setPaymentMethods(verified);
-          setPhase("select-payment");
-        }
-      } catch (e: any) {
-        setErrorMsg(e?.message ?? "No se pudo cargar la subasta.");
-        setPhase("error");
-      }
-    })();
-  }, []);
-
-  // ─── 2. Unirse ────────────────────────────────────────────────────────────
-  const doJoin = async (pmId: number | null) => {
+  const doJoin = useCallback(async (pmId: number | null) => {
     setPhase("loading");
     try {
-      const s = await joinAuctionApi(auctionId, pmId ?? undefined);
-      setState(s);
-      if (s.basePrice != null) {
-        setBidAmount(suggestedBid(s.basePrice, s.currentBid ?? 0));
-      }
-      connectWebSocket(s);
+      const joined = await joinAuctionApi(auctionId, pmId ?? undefined);
+      currentLot.current = joined.currentItemId;
+      lastBidId.current = 0;
+      setState(joined);
+      setBids([]);
+      setLastResult(null);
+      setBidAmount(joined.basePrice == null ? "" : suggestedBid(joined.basePrice, joined.currentBid ?? 0));
       setPhase("live");
-    } catch (e: any) {
-      setErrorMsg(e?.message ?? "No se pudo unir a la subasta.");
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "No se pudo unir a la subasta.");
       setPhase("error");
     }
-  };
+  }, [auctionId]);
 
-  const refreshCheckBalance = async () => {
+  useEffect(() => {
+    let active = true;
+    setPhase("loading");
+    getPaymentMethodsApi().then((methods) => {
+      if (!active) return;
+      const verified = methods.filter((method) => method.verificado
+        && (method.tipo !== "CHEQUE_CERTIFICADO" || (method.moneda ?? "ARS").toUpperCase() === "ARS"));
+      if (verified.length === 0) {
+        void doJoin(null);
+      } else {
+        setPaymentMethods(verified);
+        setSelectedPm(verified.length === 1 ? verified[0].id : null);
+        setPhase("select-payment");
+      }
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setErrorMsg(error instanceof Error ? error.message : "No se pudo cargar la subasta.");
+      setPhase("error");
+    });
+    return () => { active = false; };
+  }, [doJoin]);
+
+  const refreshCheckBalance = useCallback(async () => {
     const updated = await getAuctionStateApi(auctionId);
     setState((prev) => prev ? { ...prev, chequeDisponible: updated.chequeDisponible } : prev);
-  };
+  }, [auctionId]);
 
-  // ─── 3. WebSocket ─────────────────────────────────────────────────────────
-  const connectWebSocket = (s: JoinAuctionResponse) => {
+  const updateBid = useCallback((bid: BidUpdate) => {
+    if (bid.itemId !== currentLot.current || bid.bidId <= lastBidId.current) return;
+    lastBidId.current = bid.bidId;
+    setBids((prev) => [...prev, bid]);
+    setState((prev) => prev ? { ...prev, currentBid: bid.amount } : prev);
+    if (bid.minNextBid) setBidAmount(bid.minNextBid.toFixed(2));
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "live") return;
+
+    let active = true;
+    let connectedBefore = false;
     const transport = Platform.OS === "web"
       ? { webSocketFactory: () => new SockJS(new URL(WS_URL, window.location.href).href) }
       : { brokerURL: WS_URL.replace(/^http/, "ws") + "/websocket" };
-
     const client = new StompClient({
       ...transport,
       reconnectDelay: 5000,
       onConnect: () => {
-        // Suscribirse a pujas en tiempo real
-        client.subscribe(`/topic/auction/${auctionId}/bids`, (msg) => {
-          const bid: BidUpdate = JSON.parse(msg.body);
-          setBids((prev) => [...prev, bid]);
-          setState((prev) => prev
-            ? { ...prev, currentBid: bid.amount }
-            : prev);
-          // Sugerir la oferta mínima siguiente
-          if (bid.minNextBid) setBidAmount(bid.minNextBid.toString());
-        });
+        client.subscribe(`/topic/auction/${auctionId}/bids`, ({ body }) => updateBid(JSON.parse(body)));
+        client.subscribe(`/topic/auction/${auctionId}/result`, ({ body }) => {
+          const result: ItemResult = JSON.parse(body);
+          if (result.itemId !== currentLot.current) return;
 
-        // Suscribirse al resultado de cada ítem
-        client.subscribe(`/topic/auction/${auctionId}/result`, (msg) => {
-          const result: ItemResult = JSON.parse(msg.body);
+          currentLot.current = result.nextItemId;
+          lastBidId.current = 0;
           setLastResult(result);
           setBids([]);
           setBidError("");
-          if (s.chequeDisponible != null) void refreshCheckBalance().catch(() => {});
-          if (result.auctionFinished) {
-            setState((prev) => prev ? { ...prev, currentItemId: null } : prev);
-            Alert.alert("Subasta finalizada", "La subasta llegó a su fin.", [
-              { text: "Salir", onPress: handleLeave },
-            ]);
-          } else if (result.nextItemId) {
-            setState((prev) => prev ? {
-              ...prev,
-              currentItemId: result.nextItemId!,
-              currentItemName: result.nextItemName,
-              currentItemDescription: null,
-              basePrice: result.nextBasePrice,
-              currentBid: null,
-            } : prev);
-            if (result.nextBasePrice)
-              setBidAmount(suggestedBid(result.nextBasePrice));
-          }
+          setState((previous) => previous ? {
+            ...previous,
+            currentItemId: result.nextItemId,
+            currentItemName: result.nextItemName,
+            currentItemDescription: null,
+            basePrice: result.nextBasePrice,
+            currentBid: null,
+          } : previous);
+          setBidAmount(result.nextBasePrice == null ? "" : suggestedBid(result.nextBasePrice));
+          void refreshCheckBalance().catch(() => {});
         });
+
+        if (connectedBefore) {
+          const bidIdAtReconnect = lastBidId.current;
+          const lotAtReconnect = currentLot.current;
+          void getAuctionStateApi(auctionId).then((updated) => {
+            if (!active || bidIdAtReconnect !== lastBidId.current || lotAtReconnect !== currentLot.current) return;
+            if (updated.currentItemId !== currentLot.current) {
+              setBids([]);
+              lastBidId.current = 0;
+            }
+            currentLot.current = updated.currentItemId;
+            setState(updated);
+            setBidAmount(updated.basePrice == null ? "" : suggestedBid(updated.basePrice, updated.currentBid ?? 0));
+          }).catch(() => {});
+        }
+        connectedBefore = true;
       },
     });
     client.activate();
-    stompRef.current = client;
-  };
+    return () => {
+      active = false;
+      void client.deactivate();
+    };
+  }, [auctionId, phase, refreshCheckBalance, updateBid]);
 
   // ─── 4. Pujar ─────────────────────────────────────────────────────────────
   const handleBid = async () => {
@@ -156,17 +166,7 @@ export default function AuctionLiveScreen() {
     setBidError("");
     setBidding(true);
     try {
-      // Enviamos via REST para tener confirmación
-      await import("../../../src/services/api").then(({ default: request }) =>
-        request(`/auctions/${auctionId}/bid`, {
-          method: "POST",
-          body: JSON.stringify({
-            auctionId,
-            itemId: state.currentItemId,
-            amount,
-          }),
-        })
-      );
+      updateBid(await placeBidApi(auctionId, state.currentItemId, amount));
       // Refrescar el estado: si pagó con cheque, el disponible puede haber cambiado
       if (state.chequeDisponible != null) void refreshCheckBalance().catch(() => {});
     } catch (e: any) {
@@ -178,12 +178,16 @@ export default function AuctionLiveScreen() {
 
   // ─── 5. Salir ─────────────────────────────────────────────────────────────
   const handleLeave = async () => {
-    stompRef.current?.deactivate();
     await leaveAuctionApi(auctionId).catch(() => {});
-    router.back();
+    if (router.canGoBack()) router.back();
+    else router.replace("/auctions");
   };
 
   const confirmLeave = () => {
+    if (Platform.OS === "web") {
+      if (window.confirm("¿Querés salir de la subasta?")) void handleLeave();
+      return;
+    }
     Alert.alert("Salir de la subasta", "¿Querés salir? Podrás reconectarte más tarde.", [
       { text: "Cancelar", style: "cancel" },
       { text: "Salir", style: "destructive", onPress: handleLeave },
@@ -307,7 +311,15 @@ export default function AuctionLiveScreen() {
         {/* Ítem actual */}
         <View style={styles.itemCard}>
           <Text style={styles.itemLabel}>ARTÍCULO EN REMATE</Text>
-          <Text style={styles.itemName}>{state?.currentItemName ?? "—"}</Text>
+          <Text style={styles.itemName}>{state?.currentItemName ?? "Sin lotes en remate"}</Text>
+          {state?.streamingLink && (
+            <Pressable accessibilityRole="link" onPress={() => {
+              if (state.streamingLink) void Linking.openURL(state.streamingLink)
+                .catch(() => setBidError("No se pudo abrir la transmisión."));
+            }}>
+              <Text style={styles.streamLink}>Ver transmisión</Text>
+            </Pressable>
+          )}
           {state?.currentItemDescription && (
             <Text style={styles.itemDesc}>{state.currentItemDescription}</Text>
           )}
@@ -487,6 +499,7 @@ const styles = StyleSheet.create({
   bidSection: { backgroundColor: COLORS.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, padding: SPACING.md, gap: SPACING.sm },
   bidSectionTitle: { color: COLORS.muted, fontSize: 10, fontWeight: "700", letterSpacing: 1.5 },
   bidLimits: { color: COLORS.muted, fontSize: 12 },
+  streamLink: { color: COLORS.gold, textDecorationLine: "underline" },
   bidError: { color: COLORS.danger, fontSize: 13 },
   checkAvailableBanner: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: COLORS.gold + "12", borderRadius: RADIUS.sm, paddingHorizontal: 10, paddingVertical: 6 },
   checkAvailableText: { color: COLORS.gold, fontSize: 12, fontWeight: "600" },

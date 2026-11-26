@@ -15,6 +15,7 @@ public interface CatalogItemRepository extends JpaRepository<CatalogItem, Intege
         JOIN FETCH ci.product
         JOIN ci.catalog c
         WHERE c.auction.id = :auctionId
+        ORDER BY ci.id
     """)
     List<CatalogItem> findByAuctionId(@Param("auctionId") Integer auctionId);
 

@@ -18,6 +18,7 @@ import {
   getAuctionByIdApi,
   getAuctionCoverUrl,
 } from "../../src/services/auctionService";
+import { getAuctionPhase } from "../../src/utils/auction";
 
 const CATEGORY_LABEL: Record<string, string> = {
   comun: "Común", especial: "Especial", plata: "Plata", oro: "Oro", platino: "Platino",
@@ -34,7 +35,6 @@ export default function AuctionDetailScreen() {
     if (!id) return;
     getAuctionByIdApi(Number(id))
   .then((data) => {
-    console.log("AUCTION API:", data);
     setAuction(data);
   })
   .catch((err) =>
@@ -43,34 +43,10 @@ export default function AuctionDetailScreen() {
   .finally(() => setLoading(false));
   }, [id]);
 
-  const isLive = (() => {
-  if (!auction) return false;
-  if (auction.status !== "abierta") return false;
-  if (!auction.date || !auction.time) return false;
-
-  const now = new Date();
-
-  const auctionDateTime = new Date(
-    `${auction.date}T${auction.time}`
-  );
-
-  return auctionDateTime <= now;
-})();
-
-const isUpcoming = (() => {
-  if (!auction) return false;
-  if (auction.status !== "abierta") return false;
-  if (!auction.date || !auction.time) return false;
-
-  const now = new Date();
-
-  const auctionDateTime = new Date(
-    `${auction.date}T${auction.time}`
-  );
-
-  return auctionDateTime > now;
-})();
-
+  const phase = getAuctionPhase(auction);
+  const isLive = phase === "live";
+  const isUpcoming = phase === "upcoming";
+  const closedLabel = phase === "unscheduled" ? "Horario pendiente" : "Cerrada";
   const categoryLabel = auction?.category ? CATEGORY_LABEL[auction.category] : null;
   const coverUrl =
   auction && !coverError
@@ -95,7 +71,6 @@ const isUpcoming = (() => {
 const joinAuction = () => {
   if (!auction) return;
 
-  // TODO: futura pantalla live
   router.push({
     pathname: "/auction/live/[id]",
     params: { id: auction.id.toString() },
@@ -214,7 +189,7 @@ const joinAuction = () => {
       ? "En vivo"
       : isUpcoming
         ? "Próxima"
-        : "Cerrada"}
+        : closedLabel}
   </Text>
 </View>
             </View>
@@ -285,7 +260,7 @@ const joinAuction = () => {
       ? "Unirse a subasta"
       : isUpcoming
         ? "Subasta próxima"
-        : "Subasta finalizada"}
+        : phase === "unscheduled" ? closedLabel : "Subasta finalizada"}
   </Text>
 
   <MaterialCommunityIcons

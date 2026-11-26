@@ -85,6 +85,12 @@ export default function ProfileScreen() {
   const categoryColor = CATEGORY_COLOR[category] ?? COLORS.muted;
 
   const menuItems = [
+  ...(user?.administrator ? [{
+    icon: "gavel",
+    label: "Administración",
+    description: "Solicitudes, pagos, publicaciones y subastas",
+    onPress: () => router.push("/admin"),
+  }] : []),
   {
     icon: "credit-card-outline",
     label: "Medios de pago",

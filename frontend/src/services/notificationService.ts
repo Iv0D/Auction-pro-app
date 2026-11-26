@@ -2,7 +2,7 @@ import request from "./api";
 
 export interface Notification {
   id: number;
-  type: "PRODUCT_APPROVED" | "PRODUCT_REJECTED" | "BID_OUTBID" | "AUCTION_STARTING" | "PAYMENT_SUCCESS" | "WATCHLIST_ALERT";
+  type: "PRODUCT_APPROVED" | "PRODUCT_REJECTED" | "BID_OUTBID" | "AUCTION_STARTING" | "AUCTION_WON" | "PAYMENT_SUCCESS" | "WATCHLIST_ALERT";
   message: string;
   basePrice: number | null;
   commissionRate: number | null;

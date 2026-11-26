@@ -10,7 +10,7 @@ export interface JoinAuctionResponse {
   bidderNumber: number;
   canBid: boolean;
   chequeDisponible: number | null; // si paga con cheque certificado: monto aún disponible
-  streamingLink: string;
+  streamingLink: string | null;
   currency: string;
 }
 
@@ -56,3 +56,9 @@ export const getItemBidsApi = (itemId: number) =>
   request<BidUpdate[]>(`/auctions/items/${itemId}/bids`, { method: "GET" });
 
 export const WS_URL = `${API_BASE_URL}/ws`;
+
+export const placeBidApi = (auctionId: number, itemId: number, amount: number) =>
+  request<BidUpdate>(`/auctions/${auctionId}/bid`, {
+    method: "POST",
+    body: JSON.stringify({ itemId, amount }),
+  });

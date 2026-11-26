@@ -3,7 +3,6 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -13,7 +12,7 @@ import {
 import CustomButton from "../../src/components/ui/CustomButton";
 import CustomInput from "../../src/components/ui/CustomInput";
 import { COLORS, SPACING } from "../../src/constants/theme";
-import { resetPasswordApi } from "../../src/services/authService";
+import { resetPasswordApi, validateResetPasswordApi } from "../../src/services/authService";
 import CustomAlert from "../../src/components/CustomAlert";
 
 type ScreenState = "validating" | "form" | "success" | "invalid";
@@ -51,22 +50,16 @@ const showAlert = (
       return;
     }
 
-    // Validamos el token contra el back antes de mostrar el form
-    fetch(`${require("../../src/services/api").API_BASE_URL}/auth/reset-password/validate?token=${token}`)
-      .then((res) => {
-        if (res.ok) {
-          setScreenState("form");
-        } else {
-          return res.json().then((data) => {
-            setErrorMsg(data?.error ?? "El link no es válido o ya expiró.");
-            setScreenState("invalid");
-          });
-        }
-      })
-      .catch(() => {
-        // Si no hay red, igual mostramos el form y el back lo validará al enviar
-        setScreenState("form");
+    let active = true;
+    setScreenState("validating");
+    validateResetPasswordApi(token)
+      .then(() => { if (active) setScreenState("form"); })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setErrorMsg(error instanceof Error ? error.message : "El enlace no se pudo validar.");
+        setScreenState("invalid");
       });
+    return () => { active = false; };
   }, [token]);
 
   const handleReset = async () => {

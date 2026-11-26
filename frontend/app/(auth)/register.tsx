@@ -2,10 +2,10 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import { useState } from "react";
-import { Platform } from "react-native";
 import {
   Alert,
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -92,7 +92,8 @@ const showAlert = (
     });
     if (result.canceled || !result.assets[0]) return;
     const photo: DniPhoto = { uri: result.assets[0].uri, base64: result.assets[0].base64 ?? "" };
-    side === "frente" ? setDniFrente(photo) : setDniDorso(photo);
+    if (side === "frente") setDniFrente(photo);
+    else setDniDorso(photo);
   };
 
   const takePhoto = async (side: "frente" | "dorso") => {
@@ -107,11 +108,11 @@ const showAlert = (
     const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7, base64: true });
     if (result.canceled || !result.assets[0]) return;
     const photo: DniPhoto = { uri: result.assets[0].uri, base64: result.assets[0].base64 ?? "" };
-    side === "frente" ? setDniFrente(photo) : setDniDorso(photo);
+    if (side === "frente") setDniFrente(photo);
+    else setDniDorso(photo);
   };
 
   const handleSubmit = async () => {
-    console.log("HANDLE SUBMIT");
     if (!nombre.trim()) {
   showAlert(
   "warning",

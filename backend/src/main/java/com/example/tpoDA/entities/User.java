@@ -39,14 +39,22 @@ public class User implements UserDetails {
     @Builder.Default
     private RegistrationStatus registrationStatus = RegistrationStatus.PENDIENTE;
 
+    @Column(name = "administrator")
+    private Boolean administrator;
+
+    public boolean isAdministrator() {
+        return Boolean.TRUE.equals(administrator);
+    }
+
     @Override
     public Collection<SimpleGrantedAuthority> getAuthorities() {
-        return List.of(new SimpleGrantedAuthority("ROLE_USER"));
+        var user = new SimpleGrantedAuthority("ROLE_USER");
+        return isAdministrator() ? List.of(user, new SimpleGrantedAuthority("ROLE_ADMIN")) : List.of(user);
     }
 
     @Override public String getUsername() { return email; }
     @Override public boolean isAccountNonExpired() { return true; }
     @Override public boolean isAccountNonLocked() { return true; }
     @Override public boolean isCredentialsNonExpired() { return true; }
-    @Override public boolean isEnabled() { return password != null; }
+    @Override public boolean isEnabled() { return password != null && (registrationStatus == RegistrationStatus.APROBADO || registrationStatus == null); }
 }

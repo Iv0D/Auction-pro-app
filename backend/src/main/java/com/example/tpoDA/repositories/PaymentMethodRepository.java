@@ -16,6 +16,8 @@ public interface PaymentMethodRepository extends JpaRepository<PaymentMethod, In
 
     List<PaymentMethod> findByUser(User user);
 
+    List<PaymentMethod> findByVerificadoFalseOrderByIdAsc();
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT method FROM PaymentMethod method WHERE method.id = :id")
     Optional<PaymentMethod> findByIdForUpdate(@Param("id") Integer id);

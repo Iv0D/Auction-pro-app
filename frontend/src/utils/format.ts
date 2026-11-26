@@ -1,7 +1,8 @@
 export function formatMoney(value: number) {
-  return value.toLocaleString("en-US", {
+  return value.toLocaleString("es-AR", {
     style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
+    currency: "ARS",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   });
 }

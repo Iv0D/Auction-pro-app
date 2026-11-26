@@ -8,6 +8,7 @@ import {
 
 import { COLORS, RADIUS, SPACING } from "../../src/constants/theme";
 import { Auction, getAuctionCoverUrl, getAuctionsApi } from "../../src/services/auctionService";
+import { isAuctionLive, isAuctionUpcoming } from "../../src/utils/auction";
 
 const CATEGORY_LABEL: Record<string, string> = {
   comun: "Común", especial: "Especial", plata: "Plata", oro: "Oro", platino: "Platino",
@@ -198,33 +199,6 @@ const visibleAuctions = auctions.filter((auction) =>
     </SafeAreaView>
   );
 }
-
-const isAuctionLive = (auction: Auction) => {
-  if (
-    auction.status !== "abierta" ||
-    !auction.date ||
-    !auction.time
-  ) {
-    return false;
-  }
-
-  const now = new Date();
-  const start = new Date(`${auction.date}T${auction.time}`);
-
-  return (
-    now.toDateString() === start.toDateString() &&
-    now >= start
-  );
-};
-
-const isAuctionUpcoming = (auction: Auction) => {
-  if (!auction.date || !auction.time) return false;
-
-  const now = new Date();
-  const start = new Date(`${auction.date}T${auction.time}`);
-
-  return start >= now;
-};
 
 function AuctionCard({ auction }: { auction: Auction }) {
   const isLive = isAuctionLive(auction);

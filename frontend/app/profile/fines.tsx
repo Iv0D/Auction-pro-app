@@ -51,10 +51,12 @@ export default function FinesScreen() {
         const msg = res.hasPendingFines
           ? "Multa pagada. Todavía tenés multas pendientes."
           : "Multa pagada. Ya podés participar en subastas nuevamente.";
-        Platform.OS === "web" ? window.alert(msg) : Alert.alert("¡Listo!", msg);
+        if (Platform.OS === "web") window.alert(msg);
+        else Alert.alert("¡Listo!", msg);
       } catch (err: any) {
         const msg = err?.message ?? "No se pudo procesar el pago.";
-        Platform.OS === "web" ? window.alert(msg) : Alert.alert("Error", msg);
+        if (Platform.OS === "web") window.alert(msg);
+        else Alert.alert("Error", msg);
       } finally {
         setPayingId(null);
       }

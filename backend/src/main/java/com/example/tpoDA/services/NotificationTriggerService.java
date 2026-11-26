@@ -67,14 +67,12 @@ public class NotificationTriggerService {
                 .createdAt(LocalDateTime.now()).userResponse("PENDING").build());
     }
 
-    // ─── Pago confirmado ──────────────────────────────────────────────────────
-    public void notifyPaymentSuccess(User user, BigDecimal amount, String detail) {
-        String msg = String.format(
-            "Pago confirmado por $%,.0f. %s", amount.doubleValue(), detail != null ? detail : "");
+    public void notifyAuctionWon(User user, Auction auction, String itemName, BigDecimal total) {
+        String message = String.format(
+            "Tu oferta por \"%s\" fue adjudicada. El total estimado incluye comisión y envío.", itemName);
         save(Notification.builder()
-                .user(user)
-                .type("PAYMENT_SUCCESS").message(msg).amount(amount)
-                .createdAt(LocalDateTime.now()).userResponse("PENDING").build());
+                .user(user).auction(auction).type("AUCTION_WON").message(message)
+                .amount(total).createdAt(LocalDateTime.now()).build());
     }
 
     // ─── Alerta de watchlist ──────────────────────────────────────────────────
