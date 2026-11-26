@@ -25,8 +25,8 @@ public class Product {
     @Column(name = "fecha")
     private LocalDate date;
 
-    // 'si' / 'no'
-    @Column(name = "disponible", length = 2)
+    // 'si', 'no', 'rechazado' o 'rechazado_por_usuario'
+    @Column(name = "disponible", length = 24)
     private String available;
 
     @Column(name = "descripcionCatalogo", length = 500)
