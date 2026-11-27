@@ -1,4 +1,6 @@
-<img src="frontend/assets/images/auctionpro-login-tile.png" alt="AuctionPro logo" width="96" height="96">
+<p align="center">
+  <img src="frontend/assets/images/auctionpro-login-tile.png" alt="AuctionPro logo" width="96" height="96">
+</p>
 
 # AuctionPro
 
