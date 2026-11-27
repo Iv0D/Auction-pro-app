@@ -1,3 +1,5 @@
+<img src="frontend/assets/images/auctionpro-login-tile.png" alt="AuctionPro logo" width="96" height="96">
+
 # AuctionPro
 
 Plataforma de subastas experimental para explorar catálogos, publicar piezas y pujar en vivo desde Android o iOS (o Web). Incluye registro con aprobación, medios de pago, notificaciones, historial y un panel de operaciones para rematadores.
