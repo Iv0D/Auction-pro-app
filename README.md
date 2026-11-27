@@ -1,6 +1,6 @@
 # AuctionPro
 
-Plataforma de subastas para explorar catálogos, publicar piezas y pujar en vivo desde Android o iOS (o Web). Incluye registro con aprobación, medios de pago, notificaciones, historial y un panel de operaciones para rematadores.
+Plataforma de subastas experimental para explorar catálogos, publicar piezas y pujar en vivo desde Android o iOS (o Web). Incluye registro con aprobación, medios de pago, notificaciones, historial y un panel de operaciones para rematadores.
 
 ## Arranque rápido
 
